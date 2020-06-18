@@ -11,7 +11,8 @@ have the proper packages, we recommend using pip with venv. Then, setup is as
 easy as creating a new virtual environment at this directory with the command
 
 ```
-python3 -m venv .
+python3 -m venv env
+source env/bin/activate
 ```
 
 in the main directory, and then calling
