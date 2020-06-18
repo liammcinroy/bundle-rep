@@ -1,0 +1,11 @@
+# general
+numpy
+
+# learning
+keras
+scipy
+scikit-learn
+tensorflow
+
+# jupyter
+jupyter-notebook
