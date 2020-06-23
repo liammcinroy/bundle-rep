@@ -8,4 +8,7 @@ scikit-learn
 tensorflow
 
 # jupyter
-jupyter-notebook
+# jupyter-notebook  -- currently doesn't work on mcinroy's machine
+
+# openai gym
+gym
