@@ -26,7 +26,7 @@ class KerasEstimator(BaseEstimator, RegressorMixin):
     """
 
     def __init__(self, model=None, epochs=None, batch_size=None):
-        """Initializes a new arbitrary keras netowrk and uses it. The given
+        """Initializes a new arbitrary keras network and uses it. The given
         model should already have been compiled.
 
         Arguments:
