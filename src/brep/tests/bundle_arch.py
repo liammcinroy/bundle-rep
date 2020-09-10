@@ -4,6 +4,7 @@
 # bundle to test whether the architecture is capable of extracting the bundle
 # structure. These motivate fiber bundle representations, which are used in RL
 # environments in other brep/tests files.
+#
 # Developed by Liam McInroy, 2020/6/23.
 
 
@@ -11,12 +12,13 @@ import unittest
 
 import numpy as np
 
-import keras.backend as K
-from keras.models import Sequential, clone_model
-from keras.layers import Concatenate, Dense, Input
-from keras.optimizers import RMSprop
-
 from sklearn.base import BaseEstimator, RegressorMixin
+
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras.models import clone_model
+from tensorflow.keras.layers import Concatenate, Dense, Input
+from tensorflow.keras.optimizers import RMSprop
 
 
 class KerasEstimator(BaseEstimator, RegressorMixin):
@@ -88,15 +90,21 @@ class KerasEstimator(BaseEstimator, RegressorMixin):
         return self.model.evaluate(X, y)
 
 
-class BRepPlan2Vec(BaseEstimator, RegressorMixin, KerasEstimator):
+class BRepPlan2Vec(KerasEstimator):
     """A class implementing a simple bundle representation network with the
     Plan2Vec loss. Uses the KerasEstimator class to form an sklearn type.
     """
 
-    def __brep_plan2vec_loss__():
-        """Defines the custom Bundle Representation Plan2Vec loss.
+    def __brep_plan2vec_loss__(self, reconstr1, reconstr2, rep1, rep2):
+        """Defines the custom Bundle Representation Plan2Vec loss. For valid
+        pairs, then the Bundle Representantion Plan2Vec loss is a regression
+        of the distance along reconstructions to match the distance of the base
+        manifold of the representations, since reconstr2 is reconstructed with
+        the task-irrelevant fiber of rep1
         """
-        raise NotImplementedError
+        dist_reconstr = self.input_dist(reconstr1, reconstr2)
+        dist_rep = self.rep_dist(rep1, rep2)
+        return keras.losses.MSE(dist_reconstr, dist_rep)
 
     def __preprocess_inputs__(X, y=None):
         """Preprocesses the input batch into the form required for training,
@@ -108,16 +116,105 @@ class BRepPlan2Vec(BaseEstimator, RegressorMixin, KerasEstimator):
                 interpreted as the true distance of states (in the maximal
                 bundle representation)..
         """
-        raise NotImplementedError
+        return [(x1, x2)
+                for (i1, x1) in enumerate(X)
+                for (i2, x2) in enumerate(X) if i1 != i2]
 
-    def __init__(self, epochs=None, batch_size=None):
-        """Initializes a new keras network for use with BRepPlan2Vec.
+    def __init__(self, rep_model=None, fiber_model=None, reconstr_model=None,
+                 rep_dist=None, input_dist=None, loss_w=None,
+                 epochs=None, batch_size=None):
+        """Initializes a new test keras network for use with BRepPlan2Vec.
+        Will create a deep copy of the given network. If the model has
+        additional losses, then those will be used during training as well.
 
         Arguments:
+            rep_model, fiber_model, reconstr_model: The architecture to be
+                used. To ease development of this for arbitrary models, then
+                we require the three separate models (each with one output).
+                We presume rep_model and fiber_model share many parameters
+                (although not necessarily so), but have distinct outputs.
+                The rep_model is intended to capture the representation
+                of inputs, specifically S_\phi, while fiber_model should
+                output the fiber of the bundle, i.e. W_\phi. Then,
+                reconstr_model should accept the outputs of both rep_model
+                and fiber_model as inputs, which are concatenated, and then
+                produce a reconstruction. This allows for some flexibility,
+                i.e. a VAE could be used for reconstructions etc.
+            rep_dist: The distance function to use in representation space.
+                Should be constructed using tensorflow/keras so that backprop
+                is possible. Should accept two tensors (of equal shape).
+            input_dist: The distance function to use in representation space.
+                Stop gradient will be used anyways, so no need use tensorflow
+                or keras functions.
+            loss_w: The weight to apply to the Bundle Representation Plan2Vec
+                loss.
             epochs: The number of epochs to train on.
             batch_size: The batch size to use during training.
         """
-        raise NotImplementedError
+        # Here we construct a net for training and for testing. We'll use
+        # shared layers between the two so that they agree. We need two, since
+        # the Bundle Representation Plan2Vec loss requires two inputs whereas
+        # we only want the representation to predict for single inputs.
+        self.rep_model = clone_model(rep_model)
+        self.rep_model.set_weights(rep_model.get_weights())
+        self.fiber_model = clone_model(fiber_model)
+        self.fiber_model.set_weights(fiber_model.get_weights())
+        self.reconstr_model = clone_model(reconstr_model)
+        self.reconstr_model.set_weights(reconstr_model.get_weights())
+
+        # We keep the representation distance metric and input distance
+        # functions (as differentiable tensors for autodifferentiation)
+        self.rep_dist = rep_dist
+        self.input_dist = input_dist
+
+        # record the training params
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.loss_w = loss_w
+
+        # We now create the test model.
+        in_test = Input.from_config(rep_model.get_layer(index=0).get_config)
+        rep_test = self.rep_model(in_test)
+        fiber_test = self.fiber_model(in_test)
+        reconstr_test = self.reconstr_model([rep_test, fiber_test])
+        self.test_model = keras.Model(inputs=in_test,
+                                      outputs=[rep_test, fiber_test,
+                                               reconstr_test])
+
+        # Now we create the training model. Two copies for each train pair.
+        in1 = Input.from_config(rep_model.get_layer(index=0).get_config)
+        in2 = Input.from_config(rep_model.get_layer(index=0).get_config)
+        # We can just call the test model on the first input.
+        rep1 = self.rep_model(in1)
+        fiber1 = self.fiber_model(in1)
+        reconstr1 = self.reconstr_model([rep1, fiber1])
+        # In the second, we need to replace the fiber value of model(in2)
+        # with that of model(in1).
+        rep2 = self.rep_model(in2)
+        reconstr2 = self.reconstr_model([rep2, fiber1])  # new W_\phi value
+        # Now we can create the train model
+        self.train_model = keras.Model(inputs=[in1, in2],
+                                       outputs=[rep1, fiber1, reconstr1,
+                                                rep2, reconstr2])
+        self.train_model.compile(loss=([loss.call(in1, reconstr1)
+                                        for loss in self.reconstr_model.loss] +
+                                       [self.__brep_plan2vec_loss__(reconstr1,
+                                                                    reconstr2,
+                                                                    rep1,
+                                                                    rep2)]),
+                                 optimizer=self.reconstr_model.optimizer,
+                                 metrics=(self.rep_model.metrics +
+                                          self.fiber_model.metrics +
+                                          self.reconstr_model.metrics),
+                                 loss_weights=
+                                     self.reconstr_model.loss_weights +
+                                     [self.loss_w],
+                                 sample_weight_mode=
+                                     self.reconstr_model.sample_weight_mode,
+                                 weighted_metrics=
+                                     self.rep_model.weighted_metrics +
+                                     self.fiber_model.weighted_metrics +
+                                     self.reconstr_model.weighted_metrics)
 
     def fit(self, X, y=None):
         """Fits the given model to the given features and labels (which should
@@ -137,7 +234,7 @@ class BRepPlan2Vec(BaseEstimator, RegressorMixin, KerasEstimator):
             X: The features of the batch training set.
             y: Should be empty. Will be ignored regardless.
         """
-        return KerasEstimator.fit(self, __preprocess_inputs__(X))
+        return KerasEstimator.fit(self, self.__preprocess_inputs__(X))
 
     def score(self, X, y=None):
         """Scores the model using keras. Again used the preprocessing step
@@ -148,7 +245,7 @@ class BRepPlan2Vec(BaseEstimator, RegressorMixin, KerasEstimator):
             y: The corresponding labels. If empty, then approximates. Else,
                 then the labels are intrepreted as the true distance.
         """
-        return KerasEstimator.score(self, __preprocess_inputs__(X))
+        return KerasEstimator.score(self, self.__preprocess_inputs__(X))
 
     def loss(self, X, y=None):
         """Gets the loss metric. Again used the preprocessing step
@@ -158,4 +255,4 @@ class BRepPlan2Vec(BaseEstimator, RegressorMixin, KerasEstimator):
             X: The features of the set to test on
             y: Should b eempty. Will be ignored regardless.
         """
-        return KerasEstimator.loss(self, __preprocess_inputs__(X))
+        return KerasEstimator.loss(self.__preprocess_inputs__(X))
