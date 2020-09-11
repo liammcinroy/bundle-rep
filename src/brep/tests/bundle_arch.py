@@ -1,24 +1,18 @@
 # brep/tests/bundle_arch.py
-# This file is used to test the bundle representation architecture on non-RL
-# tasks. Specifically, we use construct a trivial product bundle and a twisted
-# bundle to test whether the architecture is capable of extracting the bundle
-# structure. These motivate fiber bundle representations, which are used in RL
+#
+# This file outlines the architecture of a non-RL fiber bundle representation
+# These motivate fiber bundle representations, which are used in RL
 # environments in other brep/tests files.
 #
 # Developed by Liam McInroy, 2020/6/23.
 
-
-import unittest
-
-import numpy as np
 
 from sklearn.base import BaseEstimator, RegressorMixin
 
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras.models import clone_model
-from tensorflow.keras.layers import Concatenate, Dense, Input
-from tensorflow.keras.optimizers import RMSprop
+from tensorflow.keras.layers import Input
 
 
 class KerasEstimator(BaseEstimator, RegressorMixin):
@@ -90,7 +84,7 @@ class KerasEstimator(BaseEstimator, RegressorMixin):
         return self.model.evaluate(X, y)
 
 
-class BRepPlan2Vec(KerasEstimator):
+class BRepPlan2VecEstimator(KerasEstimator):
     """A class implementing a simple bundle representation network with the
     Plan2Vec loss. Uses the KerasEstimator class to form an sklearn type.
     """
