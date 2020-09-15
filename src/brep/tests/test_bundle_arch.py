@@ -14,9 +14,8 @@ import unittest
 import numpy as np
 
 import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras.models import Sequential, clone_model
-from tensorflow.keras.layers import Concatenate, Dense, Input
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Input
 from tensorflow.keras.optimizers import RMSprop
 
 from bundle_arch import KerasEstimator, BRepPlan2VecEstimator
@@ -65,7 +64,25 @@ class TestKerasEstimator(unittest.TestCase):
         """Tests a non-sequential Keras model, and one wrapped in
         KerasEstimator, to affirm they perform equally.
         """
-        raise NotImplementedError()
+        inp = Input(shape=(1,))
+        hidden = Dense(10, activation='relu')(inp)
+        out = Dense(1)(hidden)
+        keras_model = tf.keras.Model(inputs=inp, outputs=out)
+        keras_model.compile(loss='mean_squared_error',
+                            optimizer=RMSprop())
+        test_model = KerasEstimator(keras_model,
+                                    epochs=500, batch_size=10)
+
+        model = TestKerasEstimator.build_simple(Sequential())
+
+        X = np.array([.1 * x for x in range(0, 10)]).reshape(-1, 1)
+        y = np.array([(.1 * x) ** 2 for x in range(0, 10)])
+
+        model.fit(X, y, epochs=500, batch_size=10, verbose=0)
+        test_model.fit(X, y)
+
+        self.assertTrue(abs(np.sum(model.predict_on_batch(X) -
+                                   test_model.predict(X))) < 1e-1)
 
 
 class TestBRepPlan2VecEstimator(unittest.TestCase):

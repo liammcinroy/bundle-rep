@@ -9,7 +9,6 @@
 
 from sklearn.base import BaseEstimator, RegressorMixin
 
-import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras.models import clone_model
 from tensorflow.keras.layers import Input
@@ -34,8 +33,7 @@ class KerasEstimator(BaseEstimator, RegressorMixin):
         self.model.compile(loss=model.loss, optimizer=model.optimizer,
                            metrics=model.metrics,
                            loss_weights=model.loss_weights,
-                           sample_weight_mode=model.sample_weight_mode,
-                           weighted_metrics=model.weighted_metrics)
+                           sample_weight_mode=model.sample_weight_mode)
         self.epochs = epochs
         self.batch_size = batch_size
 
@@ -190,25 +188,20 @@ class BRepPlan2VecEstimator(KerasEstimator):
         self.train_model = keras.Model(inputs=[in1, in2],
                                        outputs=[rep1, fiber1, reconstr1,
                                                 rep2, reconstr2])
-        self.train_model.compile(loss=([loss.call(in1, reconstr1)
-                                        for loss in self.reconstr_model.loss] +
-                                       [self.__brep_plan2vec_loss__(reconstr1,
-                                                                    reconstr2,
-                                                                    rep1,
-                                                                    rep2)]),
-                                 optimizer=self.reconstr_model.optimizer,
-                                 metrics=(self.rep_model.metrics +
-                                          self.fiber_model.metrics +
-                                          self.reconstr_model.metrics),
-                                 loss_weights=
-                                     self.reconstr_model.loss_weights +
-                                     [self.loss_w],
-                                 sample_weight_mode=
-                                     self.reconstr_model.sample_weight_mode,
-                                 weighted_metrics=
-                                     self.rep_model.weighted_metrics +
-                                     self.fiber_model.weighted_metrics +
-                                     self.reconstr_model.weighted_metrics)
+        self.train_model.compile(
+            loss=([loss.call(in1, reconstr1)
+                   for loss in self.reconstr_model.loss] +
+                  [self.__brep_plan2vec_loss__(reconstr1, reconstr2,
+                                               rep1, rep2)]),
+            optimizer=self.reconstr_model.optimizer,
+            metrics=(self.rep_model.metrics +
+                     self.fiber_model.metrics +
+                     self.reconstr_model.metrics),
+            loss_weights=self.reconstr_model.loss_weights + [self.loss_w],
+            sample_weight_mode=self.reconstr_model.sample_weight_mode,
+            weighted_metrics=(self.rep_model.weighted_metrics +
+                              self.fiber_model.weighted_metrics +
+                              self.reconstr_model.weighted_metrics))
 
     def fit(self, X, y=None):
         """Fits the given model to the given features and labels (which should
