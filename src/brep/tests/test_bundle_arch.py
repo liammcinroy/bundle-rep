@@ -15,7 +15,7 @@ import numpy as np
 
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Input
+from tensorflow.keras.layers import Concatenate, Dense, Input
 from tensorflow.keras.optimizers import RMSprop
 
 from bundle_arch import KerasEstimator, BRepPlan2VecEstimator
@@ -91,10 +91,50 @@ class TestBRepPlan2VecEstimator(unittest.TestCase):
     of bundle representations, that is evaluated elsewhere.
     """
 
+    def simple_rep_dist(self, x1, x2):
+        """The desired representation distance for test_simple (l2)
+
+        Arguments:
+            x1: a shape tf tensor
+            x2: a shape tf tensor of the same shape as x1
+        """
+        return tf.math.sqrt(tf.math.reduce_sum(tf.math.square(x1 - x2)))
+
     def test_simple(self):
         """Tests the simplest rep/fiber/reconstruction model available to
         make sure that the wrapped class performs equally to non-wrapped.
         """
+        inp = Input(shape=(2,))
+        rep = Dense(1, activation='relu')(inp)  # want first
+        fiber = Dense(1, activation='relu')(inp)  # want second
+        con = Concatenate()([rep, fiber])
+        hid2 = Dense(2, activation='relu')(con)  # want identity
+        outp = Dense(2, activation='relu')(hid2)
+
+        rep_model = tf.keras.Model(inputs=inp, outputs=rep)
+        fiber_model = tf.keras.Model(inputs=inp, outputs=fiber)
+        reconstr_model = tf.keras.Model(inputs=[rep, fiber],
+                                        outputs=[outp])
+        reconstr_model.compile(optimizer=RMSprop(),
+                               loss='mean_squared_error')
+
+        test_model = BRepPlan2VecEstimator(rep_model=rep_model,
+                                           fiber_model=fiber_model,
+                                           reconstr_model=reconstr_model,
+                                           rep_dist=self.simple_rep_dist,
+                                           input_dist=self.simple_rep_dist,
+                                           loss_w=1, epochs=500,
+                                           batch_size=100)
+
+        X = np.array([[.1 * x1, .1 * x2]
+                      for x1 in range(0, 10)
+                      for x2 in range(0, 10)]).reshape(-1, 1)
+
+        # With the given setup, then the trained model should be able to
+        # reconstruct the input and rep = inp[0] and fiber = inp[1]
+        test_model.fit(X)
+
+        print(test_model.predict(X))
         raise NotImplementedError()
 
     def test_shared(self):

@@ -7,6 +7,8 @@
 # Developed by Liam McInroy, 2020/6/23.
 
 
+import numpy as np
+
 from sklearn.base import BaseEstimator, RegressorMixin
 
 from tensorflow import keras
@@ -108,9 +110,11 @@ class BRepPlan2VecEstimator(KerasEstimator):
                 interpreted as the true distance of states (in the maximal
                 bundle representation)..
         """
-        return [(x1, x2)
-                for (i1, x1) in enumerate(X)
-                for (i2, x2) in enumerate(X) if i1 != i2]
+        new_X = np.array([(x1, x2)
+                          for (i1, x1) in enumerate(X)
+                          for (i2, x2) in enumerate(X) if i1 != i2])
+        new_y = {'reconstr1': np.array([pair_x[0] for pair_x in new_X])}
+        return new_X, new_y
 
     def __init__(self, rep_model=None, fiber_model=None, reconstr_model=None,
                  rep_dist=None, input_dist=None, loss_w=None,
@@ -221,7 +225,20 @@ class BRepPlan2VecEstimator(KerasEstimator):
             X: The features of the batch training set.
             y: Should be empty. Will be ignored regardless.
         """
-        return KerasEstimator.fit(self, self.__preprocess_inputs__(X))
+        self.train_model.fit(*self.__preprocess_inputs__(X),
+                             epochs=self.epochs, batch_size=self.batch_size,
+                             verbose=0)
+        return self
+
+    def predict(self, X):
+        """Gives the predicted rep, fiber, reconstruction outputs for the
+        given input using self.test_model, which shares weights with
+        self.train_model.
+
+        Arguments:
+            X: The features of the set to predict on.
+        """
+        return self.test_model.predict_on_batch(X)
 
     def score(self, X, y=None):
         """Scores the model using keras. Again used the preprocessing step
@@ -232,7 +249,7 @@ class BRepPlan2VecEstimator(KerasEstimator):
             y: The corresponding labels. If empty, then approximates. Else,
                 then the labels are intrepreted as the true distance.
         """
-        return KerasEstimator.score(self, self.__preprocess_inputs__(X))
+        return self.train_model.evaluate(*self.__preprocess_inputs__(X))
 
     def loss(self, X, y=None):
         """Gets the loss metric. Again used the preprocessing step
@@ -242,4 +259,4 @@ class BRepPlan2VecEstimator(KerasEstimator):
             X: The features of the set to test on
             y: Should b eempty. Will be ignored regardless.
         """
-        return KerasEstimator.loss(self.__preprocess_inputs__(X))
+        return self.train_model.evaluate(*self.__preprocess_inputs__(X))
