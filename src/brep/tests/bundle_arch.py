@@ -169,7 +169,7 @@ class BRepPlan2VecEstimator(KerasEstimator):
         self.loss_w = loss_w
 
         # We now create the test model.
-        in_test = Input.from_config(rep_model.get_layer(index=0).get_config)
+        in_test = Input(shape=rep_model.inputs[0].shape)
         rep_test = self.rep_model(in_test)
         fiber_test = self.fiber_model(in_test)
         reconstr_test = self.reconstr_model([rep_test, fiber_test])
@@ -178,8 +178,8 @@ class BRepPlan2VecEstimator(KerasEstimator):
                                                reconstr_test])
 
         # Now we create the training model. Two copies for each train pair.
-        in1 = Input.from_config(rep_model.get_layer(index=0).get_config)
-        in2 = Input.from_config(rep_model.get_layer(index=0).get_config)
+        in1 = Input(shape=rep_model.inputs[0].shape)
+        in2 = Input(shape=rep_model.inputs[0].shape)
         # We can just call the test model on the first input.
         rep1 = self.rep_model(in1)
         fiber1 = self.fiber_model(in1)

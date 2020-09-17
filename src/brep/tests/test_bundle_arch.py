@@ -107,13 +107,15 @@ class TestBRepPlan2VecEstimator(unittest.TestCase):
         inp = Input(shape=(2,))
         rep = Dense(1, activation='relu')(inp)  # want first
         fiber = Dense(1, activation='relu')(inp)  # want second
-        con = Concatenate()([rep, fiber])
+        rep_inp = Input(shape=(1,))
+        fiber_inp = Input(shape=(1,))
+        con = Concatenate()([rep_inp, fiber_inp])
         hid2 = Dense(2, activation='relu')(con)  # want identity
         outp = Dense(2, activation='relu')(hid2)
 
         rep_model = tf.keras.Model(inputs=inp, outputs=rep)
         fiber_model = tf.keras.Model(inputs=inp, outputs=fiber)
-        reconstr_model = tf.keras.Model(inputs=[rep, fiber],
+        reconstr_model = tf.keras.Model(inputs=[rep_inp, fiber_inp],
                                         outputs=[outp])
         reconstr_model.compile(optimizer=RMSprop(),
                                loss='mean_squared_error')
