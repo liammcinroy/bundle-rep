@@ -95,10 +95,11 @@ class TestBRepPlan2VecEstimator(unittest.TestCase):
         """The desired representation distance for test_simple (l2)
 
         Arguments:
-            x1: a shape tf tensor
-            x2: a shape tf tensor of the same shape as x1
+            x1: a tf tensor
+            x2: a tf tensor of the same shape as x1
         """
-        return tf.math.sqrt(tf.math.reduce_sum(tf.math.square(x1 - x2)))
+        return tf.math.sqrt(tf.math.reduce_sum(tf.math.square(x1 - x2),
+                                               axis=1))
 
     def test_simple(self):
         """Tests the simplest rep/fiber/reconstruction model available to
@@ -125,8 +126,8 @@ class TestBRepPlan2VecEstimator(unittest.TestCase):
                                            reconstr_model=reconstr_model,
                                            rep_dist=self.simple_rep_dist,
                                            input_dist=self.simple_rep_dist,
-                                           loss_w=1, epochs=500,
-                                           batch_size=100)
+                                           loss_w=1, optimizer=RMSprop(),
+                                           epochs=500, batch_size=100)
 
         X = np.array([[.1 * x1, .1 * x2]
                       for x1 in range(0, 10)

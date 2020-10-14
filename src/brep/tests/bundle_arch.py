@@ -11,6 +11,8 @@ import numpy as np
 
 from sklearn.base import BaseEstimator, RegressorMixin
 
+import tensorflow as tf
+
 from tensorflow import keras
 from tensorflow.keras.models import clone_model
 from tensorflow.keras.layers import Input
@@ -84,12 +86,13 @@ class KerasEstimator(BaseEstimator, RegressorMixin):
         return self.model.evaluate(X, y)
 
 
-class BRepPlan2VecEstimator(KerasEstimator):
+class BRepPlan2VecKerasTrainModel(keras.Model):
     """A class implementing a simple bundle representation network with the
-    Plan2Vec loss. Uses the KerasEstimator class to form an sklearn type.
+    Plan2Vec loss. Overrides the behavior of a normal keras.Model for the
+    customized losses.
     """
 
-    def __brep_plan2vec_loss__(self, reconstr1, reconstr2, rep1, rep2):
+    def __brep_plan2vec_loss__(self, reconstr1, rep1, reconstr2, rep2):
         """Defines the custom Bundle Representation Plan2Vec loss. For valid
         pairs, then the Bundle Representantion Plan2Vec loss is a regression
         of the distance along reconstructions to match the distance of the base
@@ -98,9 +101,113 @@ class BRepPlan2VecEstimator(KerasEstimator):
         """
         dist_reconstr = self.input_dist(reconstr1, reconstr2)
         dist_rep = self.rep_dist(rep1, rep2)
-        return keras.losses.MSE(dist_reconstr, dist_rep)
 
-    def __preprocess_inputs__(X, y=None):
+        # TODO use a non-MSE for non-euclidean manifolds
+        return self.loss_w * keras.losses.MSE(dist_reconstr, dist_rep)
+
+    def __init__(self, inputs=None, outputs=None, reconstr_loss=None,
+                 rep_dist=None, input_dist=None, loss_w=None,
+                 optimizer=None):
+        """Initializes a new test keras network for use with BRepPlan2Vec.
+        Will create a deep copy of the given networks to construct its own.
+        If the models have additional losses, then those will be used during
+        training as well. Don't call compile on this model!
+
+        Arguments:
+            inputs: The tf input tensors used for the model. Should be in1, in2
+            outputs: The tf output tensors used for the model. Should be
+                [rep1, fiber1, reconstr1, rep2, reconstr2].
+            reconstr_loss: A tf loss on the reconstructed output.
+            rep_dist: The distance function to use in representation space.
+                Should be constructed using tensorflow/keras so that backprop
+                is possible. Should accept two tensors (of equal shape).
+            input_dist: The distance function to use in representation space.
+                Stop gradient will be used anyways, so no need use tensorflow
+                or keras functions.
+            loss_w: The weight to apply to the Bundle Representation Plan2Vec
+                loss.
+            optimizer: The tensorflow.keras.optimizers.Optimizer to be used
+                in each submodel.
+        """
+        # Now we can create the train model
+        super(BRepPlan2VecKerasTrainModel, self).__init__(inputs=inputs,
+                                                          outputs=outputs)
+
+        # We keep the reconstruction loss for use during training.
+        self.reconstr_loss = reconstr_loss
+
+        # We keep the representation distance metric and input distance
+        # functions (as differentiable tensors for autodifferentiation)
+        self.rep_dist = rep_dist
+        self.input_dist = input_dist
+
+        # record the training params
+        self.loss_w = loss_w
+
+        # create the loss trackers
+        self.reconstr_loss_tracker = keras.metrics.Mean(
+            name='reconstruction loss')
+        self.brep_loss_tracker = keras.metrics.Mean(
+            name='bundle representation loss')
+
+        # unpack the loss
+        self.add_loss(self.__brep_plan2vec_loss__(outputs[2],
+                                                  outputs[0],
+                                                  outputs[4],
+                                                  outputs[3]))
+
+        # configure the optimizer with compile
+        self.compile(optimizer=optimizer)
+
+        def train_step(self, data):
+            """The keras train_step used in train. We override to apply the
+            Bundle Representation Plan2Vec training loss as well.
+
+            Arguments:
+                data: The training data. Should be X of pairs of inputs and
+                    y is the first pair item input.
+            """
+            X, y = data
+
+            with tf.GradientTape() as tape:
+                rep1, fiber1, reconstr1, rep2, reconstr2 = self(X,
+                                                                training=True)
+                reconstr_loss = self.reconstr_loss(y, reconstr1)
+                brep_loss = self.compiled_loss(reconstr1, rep1,
+                                               reconstr2, rep2)
+                self.loss = {'reconstruction_loss': reconstr_loss,
+                             'bundle_representation_loss': brep_loss}
+
+            trainable_vars = self.trainable_variables
+            gradients = tape.gradient(self.loss, trainable_vars)
+
+            # Update weights
+            self.optimizer.apply_gradients(zip(gradients, trainable_vars))
+
+            self.reconstr_loss_tracker.update_state(
+                self.loss['reconstruction_loss'])
+            self.brep_loss_tracker.update_state(
+                self.loss['bundle_representation_loss'])
+
+            return {'reconstruction loss': self.reconstr_loss_tracker.result(),
+                    'bundle representation loss':
+                    self.brep_loss_tracker.result()}
+
+        @property
+        def metrics(self):
+            """We list our `Metric` objects here so that `reset_states()` can
+            be called automatically at the start of each epoch or at the
+            start of `evaluate()`.
+            """
+            return [self.reconstr_loss_tracker, self.brep_loss_tracker]
+
+
+class BRepPlan2VecEstimator(KerasEstimator):
+    """A class implementing a simple bundle representation network with the
+    Plan2Vec loss. Uses the KerasEstimator class to form an sklearn type.
+    """
+
+    def __preprocess_inputs__(self, X, y=None):
         """Preprocesses the input batch into the form required for training,
         loss, scoring by Bundle Representation Plan2Vec.
 
@@ -113,16 +220,15 @@ class BRepPlan2VecEstimator(KerasEstimator):
         new_X = np.array([(x1, x2)
                           for (i1, x1) in enumerate(X)
                           for (i2, x2) in enumerate(X) if i1 != i2])
-        new_y = {'reconstr1': np.array([pair_x[0] for pair_x in new_X])}
+        new_y = np.array([pair_x[0] for pair_x in new_X])
         return new_X, new_y
 
     def __init__(self, rep_model=None, fiber_model=None, reconstr_model=None,
-                 rep_dist=None, input_dist=None, loss_w=None,
-                 epochs=None, batch_size=None):
+                 reconstr_loss=None, rep_dist=None, input_dist=None,
+                 loss_w=None, optimizer=None, epochs=None, batch_size=None):
         """Initializes a new test keras network for use with BRepPlan2Vec.
         Will create a deep copy of the given network. If the model has
         additional losses, then those will be used during training as well.
-
         Arguments:
             rep_model, fiber_model, reconstr_model: The architecture to be
                 used. To ease development of this for arbitrary models, then
@@ -136,6 +242,7 @@ class BRepPlan2VecEstimator(KerasEstimator):
                 and fiber_model as inputs, which are concatenated, and then
                 produce a reconstruction. This allows for some flexibility,
                 i.e. a VAE could be used for reconstructions etc.
+            reconstr_loss: A tf loss on the reconstructed output.
             rep_dist: The distance function to use in representation space.
                 Should be constructed using tensorflow/keras so that backprop
                 is possible. Should accept two tensors (of equal shape).
@@ -144,6 +251,8 @@ class BRepPlan2VecEstimator(KerasEstimator):
                 or keras functions.
             loss_w: The weight to apply to the Bundle Representation Plan2Vec
                 loss.
+            optimizer: A tf optimizer to apply to the Bundle Representation
+                training network.
             epochs: The number of epochs to train on.
             batch_size: The batch size to use during training.
         """
@@ -158,15 +267,19 @@ class BRepPlan2VecEstimator(KerasEstimator):
         self.reconstr_model = clone_model(reconstr_model)
         self.reconstr_model.set_weights(reconstr_model.get_weights())
 
+        # We keep the reconstruction loss for use during training.
+        self.reconstr_loss = reconstr_loss
+
         # We keep the representation distance metric and input distance
         # functions (as differentiable tensors for autodifferentiation)
         self.rep_dist = rep_dist
         self.input_dist = input_dist
 
         # record the training params
+        self.loss_w = loss_w
+        self.optimizer = optimizer
         self.epochs = epochs
         self.batch_size = batch_size
-        self.loss_w = loss_w
 
         # We now create the test model.
         in_test = Input(shape=rep_model.inputs[0].shape)
@@ -189,23 +302,12 @@ class BRepPlan2VecEstimator(KerasEstimator):
         rep2 = self.rep_model(in2)
         reconstr2 = self.reconstr_model([rep2, fiber1])  # new W_\phi value
         # Now we can create the train model
-        self.train_model = keras.Model(inputs=[in1, in2],
-                                       outputs=[rep1, fiber1, reconstr1,
-                                                rep2, reconstr2])
-        self.train_model.compile(
-            loss=([loss.call(in1, reconstr1)
-                   for loss in self.reconstr_model.loss] +
-                  [self.__brep_plan2vec_loss__(reconstr1, reconstr2,
-                                               rep1, rep2)]),
-            optimizer=self.reconstr_model.optimizer,
-            metrics=(self.rep_model.metrics +
-                     self.fiber_model.metrics +
-                     self.reconstr_model.metrics),
-            loss_weights=self.reconstr_model.loss_weights + [self.loss_w],
-            sample_weight_mode=self.reconstr_model.sample_weight_mode,
-            weighted_metrics=(self.rep_model.weighted_metrics +
-                              self.fiber_model.weighted_metrics +
-                              self.reconstr_model.weighted_metrics))
+        self.train_model = BRepPlan2VecKerasTrainModel(
+            inputs=[in1, in2], outputs=[rep1, fiber1, reconstr1,
+                                        rep2, reconstr2],
+            reconstr_loss=self.reconstr_loss, rep_dist=self.rep_dist,
+            input_dist=self.input_dist, loss_w=self.loss_w,
+            optimizer=self.optimizer)
 
     def fit(self, X, y=None):
         """Fits the given model to the given features and labels (which should
