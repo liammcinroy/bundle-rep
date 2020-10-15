@@ -50,16 +50,23 @@ class TestKerasEstimator(unittest.TestCase):
 
         test_model = KerasEstimator(
             TestKerasEstimator.build_simple(Sequential()),
-            epochs=500, batch_size=10)
+            epochs=1000, batch_size=10)
 
         X = np.array([.1 * x for x in range(0, 10)]).reshape(-1, 1)
         y = np.array([(.1 * x) ** 2 for x in range(0, 10)])
 
-        model.fit(X, y, epochs=500, batch_size=10, verbose=0)
+        tf.random.set_seed(0)
+        model.fit(X, y, epochs=1000, batch_size=10, verbose=0)
+
+        tf.random.set_seed(0)
         test_model.fit(X, y)
 
-        self.assertTrue(abs(np.sum(model.predict_on_batch(X) -
-                                   test_model.predict(X))) < 1e-1)
+        self.assertTrue(np.sum(np.abs(model.predict_on_batch(X) -
+                                      test_model.predict_proba(X))) < 1e-1,
+                        'Sequential wrapped Keras models did not perform '
+                        'similarly to non-wrapped. Differed by {}'
+                        .format(np.sum(np.abs(model.predict_on_batch(X) -
+                                              test_model.predict_proba(X)))))
 
     def test_models(self):
         """Tests a non-sequential Keras model, and one wrapped in
@@ -72,18 +79,25 @@ class TestKerasEstimator(unittest.TestCase):
         keras_model.compile(loss='mean_squared_error',
                             optimizer=RMSprop())
         test_model = KerasEstimator(keras_model,
-                                    epochs=500, batch_size=10)
+                                    epochs=1000, batch_size=10)
 
         model = TestKerasEstimator.build_simple(Sequential())
 
         X = np.array([.1 * x for x in range(0, 10)]).reshape(-1, 1)
         y = np.array([(.1 * x) ** 2 for x in range(0, 10)])
 
-        model.fit(X, y, epochs=500, batch_size=10, verbose=0)
+        tf.random.set_seed(0)
+        model.fit(X, y, epochs=1000, batch_size=10, verbose=0)
+
+        tf.random.set_seed(0)
         test_model.fit(X, y)
 
-        self.assertTrue(abs(np.sum(model.predict_on_batch(X) -
-                                   test_model.predict(X))) < 1e-1)
+        self.assertTrue(np.sum(np.abs(model.predict_on_batch(X) -
+                                      test_model.predict_proba(X))) < 1e-1,
+                        'Functional wrapped Keras models did not perform '
+                        'similarly to non-wrapped. Differed by {}'
+                        .format(np.sum(np.abs(model.predict_on_batch(X) -
+                                              test_model.predict_proba(X)))))
 
 
 class TestBRepPlan2VecEstimator(unittest.TestCase):
@@ -114,7 +128,7 @@ class TestBRepPlan2VecEstimator(unittest.TestCase):
 
     def test_simple(self):
         """Tests the simplest rep/fiber/reconstruction model available to
-        make sure that the wrapped class performs equally to non-wrapped.
+        make sure that the weights are shared properly.
         """
         inp = Input(shape=(2,))
         rep = Dense(1, activation='relu')(inp)  # want first
@@ -129,16 +143,16 @@ class TestBRepPlan2VecEstimator(unittest.TestCase):
         fiber_model = tf.keras.Model(inputs=inp, outputs=fiber)
         reconstr_model = tf.keras.Model(inputs=[rep_inp, fiber_inp],
                                         outputs=[outp])
+        reconstr_model.compile(loss=keras.losses.mean_squared_error,
+                               optimizer=RMSprop())
 
-        test_model = BRepPlan2VecEstimator(rep_model=rep_model,
-                                           fiber_model=fiber_model,
-                                           reconstr_model=reconstr_model,
-                                           reconstr_loss=keras
-                                           .losses.mean_squared_error,
-                                           rep_dist=self.simple_rep_dist,
-                                           input_dist=self.simple_input_dist,
-                                           loss_w=1, optimizer=RMSprop(),
-                                           epochs=500, batch_size=100)
+        model = BRepPlan2VecEstimator(rep_model=rep_model,
+                                      fiber_model=fiber_model,
+                                      reconstr_model=reconstr_model,
+                                      rep_dist=self.simple_rep_dist,
+                                      input_dist=self.simple_input_dist,
+                                      loss_w=1, optimizer=RMSprop(),
+                                      epochs=1, batch_size=100)
 
         X = np.array([[x1, x2]
                       for x1 in np.linspace(0, 1, 10)
@@ -146,21 +160,19 @@ class TestBRepPlan2VecEstimator(unittest.TestCase):
 
         # With the given setup, then the trained model should be able to
         # reconstruct the input and rep = inp[0] and fiber = inp[1]
-        test_model.fit(X)
+        tf.random.set_seed(0)
+        model.fit(X)
 
-        raise NotImplementedError()
-
-    def test_shared(self):
-        """Tests that rep/fiber/reconstruction model with shared weights
-        and the wrapped class performs equally to non-wrapped.
-        """
-        raise NotImplementedError()
-
-    def test_aux_loss(self):
-        """Tests the rep/fiber/reconstruction model with a predefined loss
-        and its the wrapped class performs equally to non-wrapped.
-        """
-        raise NotImplementedError()
+        # make sure that the training transferred to the .test_model
+        self.assertTrue(np.sum(np.abs(model.predict(X)[0] -
+                                      reconstr_model
+                                      .predict_on_batch(
+                                          [rep_model
+                                           .predict_on_batch(X),
+                                           fiber_model
+                                           .predict_on_batch(X)])[0])) > 1e-5,
+                        'BRepPlan2VecEstimator didn\'t share .test_model and '
+                        '.train_model weights properly.')
 
 
 if __name__ == '__main__':

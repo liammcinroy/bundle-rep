@@ -35,9 +35,7 @@ class KerasEstimator(BaseEstimator, RegressorMixin):
         self.model = clone_model(model)
         self.model.set_weights(model.get_weights())
         self.model.compile(loss=model.loss, optimizer=model.optimizer,
-                           metrics=model.metrics,
-                           loss_weights=model.loss_weights,
-                           sample_weight_mode=model.sample_weight_mode)
+                           metrics=model.metrics)
         self.epochs = epochs
         self.batch_size = batch_size
 
@@ -105,9 +103,10 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
         # TODO use a non-MSE for non-euclidean manifolds
         return self.loss_w * keras.losses.MSE(dist_reconstr, dist_rep)
 
-    def __init__(self, inputs=None, outputs=None, reconstr_loss=None,
-                 rep_dist=None, input_dist=None, loss_w=None,
-                 optimizer=None, reconstr_model_name=None):
+    def __init__(self, inputs=None, outputs=None,
+                 rep_dist=None, input_dist=None,
+                 loss_w=None, optimizer=None,
+                 reconstr_loss=None, reconstr_model_name=None):
         """Initializes a new test keras network for use with BRepPlan2Vec.
         Will create a deep copy of the given networks to construct its own.
         If the models have additional losses, then those will be used during
@@ -117,7 +116,6 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
             inputs: The tf input tensors used for the model. Should be in1, in2
             outputs: The tf output tensors used for the model. Should be
                 [rep1, fiber1, reconstr1, rep2, reconstr2].
-            reconstr_loss: A tf loss on the reconstructed output.
             rep_dist: The distance function to use in representation space.
                 Should be constructed using tensorflow/keras so that backprop
                 is possible. Should accept two tensors (of equal shape).
@@ -128,6 +126,7 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
                 loss.
             optimizer: The tensorflow.keras.optimizers.Optimizer to be used
                 in each submodel.
+            reconstr_loss: A tf loss on the reconstructed output.
             reconstr_model_name: The name to pass to the loss on reconstr1.
         """
         # Now we can create the train model
@@ -267,9 +266,8 @@ class BRepPlan2VecEstimator(KerasEstimator):
         self.fiber_model.set_weights(fiber_model.get_weights())
         self.reconstr_model = clone_model(reconstr_model)
         self.reconstr_model.set_weights(reconstr_model.get_weights())
-
-        # We keep the reconstruction loss for use during training.
-        self.reconstr_loss = reconstr_loss
+        self.reconstr_model.compile(loss=reconstr_model.loss,
+                                    metrics=reconstr_model.metrics)
 
         # We keep the representation distance metric and input distance
         # functions (as differentiable tensors for autodifferentiation)
@@ -306,9 +304,9 @@ class BRepPlan2VecEstimator(KerasEstimator):
         self.train_model = BRepPlan2VecKerasTrainModel(
             inputs=[in1, in2], outputs=[rep1, fiber1, reconstr1,
                                         rep2, reconstr2],
-            reconstr_loss=self.reconstr_loss, rep_dist=self.rep_dist,
-            input_dist=self.input_dist, loss_w=self.loss_w,
-            optimizer=self.optimizer,
+            rep_dist=self.rep_dist, input_dist=self.input_dist,
+            loss_w=self.loss_w, optimizer=self.optimizer,
+            reconstr_loss=self.reconstr_model.loss,
             reconstr_model_name=self.reconstr_model.name)
 
     def fit(self, X, y=None):
@@ -335,6 +333,16 @@ class BRepPlan2VecEstimator(KerasEstimator):
         return self
 
     def predict(self, X):
+        """Gives the predicted rep, fiber, reconstruction outputs for the
+        given input using self.test_model, which shares weights with
+        self.train_model.
+
+        Arguments:
+            X: The features of the set to predict on.
+        """
+        return self.test_model.predict_on_batch(X)
+
+    def predict_proba(self, X):
         """Gives the predicted rep, fiber, reconstruction outputs for the
         given input using self.test_model, which shares weights with
         self.train_model.
