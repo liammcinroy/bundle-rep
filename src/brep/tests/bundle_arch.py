@@ -39,15 +39,17 @@ class KerasEstimator(BaseEstimator, RegressorMixin):
         self.epochs = epochs
         self.batch_size = batch_size
 
-    def fit(self, X, y=None):
+    def fit(self, X, y=None, verbose=0, **kwargs):
         """Fits the keras model to X, y
 
         Arguments:
             X: The features of the dataset
             y: The labels of the dataset.
+            verbose: The level of verbosity to output. Defaults to 0.
+            kwargs: Various tensorflow keyword arguments.
         """
         self.model.fit(X, y, epochs=self.epochs, batch_size=self.batch_size,
-                       verbose=0)
+                       verbose=verbose, **kwargs)
 
         return self
 
@@ -171,13 +173,15 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
                 rep1, fiber1, reconstr1, rep2, reconstr2 = self(X,
                                                                 training=True)
                 reconstr_loss = self.reconstr_loss(y, reconstr1)
-                brep_loss = self.compiled_loss(reconstr1, rep1,
-                                               reconstr2, rep2)
+                brep_loss = self.__brep_plan2vec_loss__(reconstr1, rep1,
+                                                        reconstr2, rep2)
                 loss = {self.reconstr_loss_tracker.name: reconstr_loss,
                         self.brep_loss_tracker.name: brep_loss}
 
             trainable_vars = self.trainable_variables
-            gradients = tape.gradient(self.loss, trainable_vars)
+            gradients = tape.gradient(loss[self.reconstr_loss_tracker.name],
+                                      # loss[self.brep_loss_tracker.name],
+                                      trainable_vars)
 
             # Update weights
             self.optimizer.apply_gradients(zip(gradients, trainable_vars))
@@ -309,7 +313,7 @@ class BRepPlan2VecEstimator(KerasEstimator):
             reconstr_loss=self.reconstr_model.loss,
             reconstr_model_name=self.reconstr_model.name)
 
-    def fit(self, X, y=None):
+    def fit(self, X, y=None, verbose=0, **kwargs):
         """Fits the given model to the given features and labels (which should
         just be the original features). In other words, the model should be
         capable firstly of reconstructing states. Additionally, there should
@@ -326,10 +330,12 @@ class BRepPlan2VecEstimator(KerasEstimator):
         Arguments:
             X: The features of the batch training set.
             y: Should be empty. Will be ignored regardless.
+            verbose: The level of verbosity to output. Defaults to 0.
+            kwargs: Various tensorflow keyword arguments.
         """
         self.train_model.fit(*self.__preprocess_inputs__(X),
                              epochs=self.epochs, batch_size=self.batch_size,
-                             verbose=0)
+                             verbose=verbose, **kwargs)
         return self
 
     def predict(self, X):

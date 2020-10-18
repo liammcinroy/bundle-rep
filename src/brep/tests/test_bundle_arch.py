@@ -158,8 +158,6 @@ class TestBRepPlan2VecEstimator(unittest.TestCase):
                       for x1 in np.linspace(0, 1, 10)
                       for x2 in np.linspace(0, 1, 10)]).reshape(100, 2)
 
-        # With the given setup, then the trained model should be able to
-        # reconstruct the input and rep = inp[0] and fiber = inp[1]
         tf.random.set_seed(0)
         model.fit(X)
 
@@ -173,6 +171,45 @@ class TestBRepPlan2VecEstimator(unittest.TestCase):
                                            .predict_on_batch(X)])[0])) > 1e-5,
                         'BRepPlan2VecEstimator didn\'t share .test_model and '
                         '.train_model weights properly.')
+
+    def test_product_bundle(self):
+        """Evaluates plan2vec on a product bundle representation to see if it
+        can uncover the two products.
+        """
+        # we'll have a euclidean metrics, as in the shared test example.
+        # So rep = x1, fiber = f(x2) such that f has an inverse.
+        X = np.array([[x1, x2]
+                      for x1 in np.linspace(0, 1, 10)
+                      for x2 in np.linspace(0, 1, 10)]).reshape(100, 2)
+
+        inp = Input(shape=(2,))
+        rep = Dense(1, activation='relu')(inp)  # want first
+        fiber = Dense(1, activation='relu')(inp)  # want second
+        rep_inp = Input(shape=(1,))
+        fiber_inp = Input(shape=(1,))
+        con = Concatenate()([rep_inp, fiber_inp])
+        hid2 = Dense(2, activation='relu')(con)  # want identity
+        outp = Dense(2, activation='relu')(hid2)
+
+        rep_model = tf.keras.Model(inputs=inp, outputs=rep)
+        fiber_model = tf.keras.Model(inputs=inp, outputs=fiber)
+        reconstr_model = tf.keras.Model(inputs=[rep_inp, fiber_inp],
+                                        outputs=[outp])
+        reconstr_model.compile(loss=keras.losses.mean_squared_error,
+                               optimizer=RMSprop())
+
+        model = BRepPlan2VecEstimator(rep_model=rep_model,
+                                      fiber_model=fiber_model,
+                                      reconstr_model=reconstr_model,
+                                      rep_dist=self.simple_rep_dist,
+                                      input_dist=self.simple_input_dist,
+                                      loss_w=1, optimizer=RMSprop(),
+                                      epochs=100, batch_size=100)
+
+        # With the given setup, then the trained model should be able to
+        # reconstruct the input and rep = inp[0] and fiber = inp[1]
+        tf.random.set_seed(0)
+        model.fit(X, verbose=1)
 
 
 if __name__ == '__main__':
