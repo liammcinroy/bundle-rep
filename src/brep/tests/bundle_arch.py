@@ -92,23 +92,31 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
     customized losses.
     """
 
-    def __brep_plan2vec_loss__(self, reconstr1, rep1, reconstr2, rep2):
+    def __brep_plan2vec_loss__(self, y_true, y_pred):
         """Defines the custom Bundle Representation Plan2Vec loss. For valid
         pairs, then the Bundle Representantion Plan2Vec loss is a regression
         of the distance along reconstructions to match the distance of the base
         manifold of the representations, since reconstr2 is reconstructed with
         the task-irrelevant fiber of rep1
         """
+        rep1 = y_pred[0]
+        # IGNORE - fiber1 = y_pred[1]
+        reconstr1 = y_pred[2]
+        rep2 = y_pred[3]
+        reconstr2 = y_pred[4]
+
         dist_reconstr = self.input_dist(reconstr1, reconstr2)
         dist_rep = self.rep_dist(rep1, rep2)
 
-        # TODO use a non-MSE for non-euclidean manifolds
-        return self.loss_w * keras.losses.MSE(dist_reconstr, dist_rep)
+        return (self.reconstr_loss(y_true, y_pred) +
+                self.loss_w * (dist_reconstr - dist_rep) *
+                (dist_reconstr - dist_rep))
 
     def __init__(self, inputs=None, outputs=None,
                  rep_dist=None, input_dist=None,
                  loss_w=None, optimizer=None,
-                 reconstr_loss=None, reconstr_model_name=None):
+                 reconstr_loss=None, reconstr_model_name=None,
+                 **kwargs):
         """Initializes a new test keras network for use with BRepPlan2Vec.
         Will create a deep copy of the given networks to construct its own.
         If the models have additional losses, then those will be used during
@@ -133,7 +141,8 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
         """
         # Now we can create the train model
         super(BRepPlan2VecKerasTrainModel, self).__init__(inputs=inputs,
-                                                          outputs=outputs)
+                                                          outputs=outputs,
+                                                          **kwargs)
 
         # We keep the reconstruction loss for use during training.
         self.reconstr_loss = reconstr_loss
@@ -155,8 +164,7 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
             name='bundle_representation_loss')
 
         # configure the optimizer with compile
-        self.compile(loss={reconstr_model_name:
-                           self.reconstr_loss},
+        self.compile(loss=self.__brep_plan2vec_loss__,
                      optimizer=optimizer)
 
         def train_step(self, data):
@@ -172,24 +180,18 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
             with tf.GradientTape() as tape:
                 rep1, fiber1, reconstr1, rep2, reconstr2 = self(X,
                                                                 training=True)
+                loss = self.compiled_loss(y, reconstr1)
                 reconstr_loss = self.reconstr_loss(y, reconstr1)
-                brep_loss = self.__brep_plan2vec_loss__(reconstr1, rep1,
-                                                        reconstr2, rep2)
-                loss = {self.reconstr_loss_tracker.name: reconstr_loss,
-                        self.brep_loss_tracker.name: brep_loss}
 
             trainable_vars = self.trainable_variables
-            gradients = tape.gradient(loss[self.reconstr_loss_tracker.name],
-                                      # loss[self.brep_loss_tracker.name],
+            gradients = tape.gradient(loss,
                                       trainable_vars)
 
             # Update weights
             self.optimizer.apply_gradients(zip(gradients, trainable_vars))
 
-            self.reconstr_loss_tracker.update_state(
-                loss[self.reconstr_loss_tracker.name])
-            self.brep_loss_tracker.update_state(
-                loss[self.brep_loss_tracker.name])
+            self.reconstr_loss_tracker.update_state(reconstr_loss)
+            self.brep_loss_tracker.update_state(loss - reconstr_loss)
 
             return {self.reconstr_loss_tracker.name:
                     self.reconstr_loss_tracker.result(),
@@ -265,13 +267,19 @@ class BRepPlan2VecEstimator(KerasEstimator):
         # the Bundle Representation Plan2Vec loss requires two inputs whereas
         # we only want the representation to predict for single inputs.
         self.rep_model = clone_model(rep_model)
+        # self.rep_model.name = rep_model.name + '_scipy'
         self.rep_model.set_weights(rep_model.get_weights())
+
         self.fiber_model = clone_model(fiber_model)
+        # self.fiber_model.name = fiber_model.name + '_scipy'
         self.fiber_model.set_weights(fiber_model.get_weights())
+
         self.reconstr_model = clone_model(reconstr_model)
+        # self.reconstr_model.name = reconstr_model + '_scipy'
         self.reconstr_model.set_weights(reconstr_model.get_weights())
         self.reconstr_model.compile(loss=reconstr_model.loss,
-                                    metrics=reconstr_model.metrics)
+                                    metrics=reconstr_model.metrics,
+                                    optimizer=reconstr_model.optimizer)
 
         # We keep the representation distance metric and input distance
         # functions (as differentiable tensors for autodifferentiation)
@@ -285,25 +293,31 @@ class BRepPlan2VecEstimator(KerasEstimator):
         self.batch_size = batch_size
 
         # We now create the test model.
-        in_test = Input(shape=rep_model.inputs[0].shape[1:])
+        in_test = Input(shape=self.rep_model.inputs[0].shape[1:],
+                        name='input_brep_plan2vec_test')
         rep_test = self.rep_model(in_test)
         fiber_test = self.fiber_model(in_test)
         reconstr_test = self.reconstr_model([rep_test, fiber_test])
         self.test_model = keras.Model(inputs=in_test,
                                       outputs=[rep_test, fiber_test,
-                                               reconstr_test])
+                                               reconstr_test],
+                                      name='brep_plan2vec_test')
 
         # Now we create the training model. Two copies for each train pair.
-        in1 = Input(shape=rep_model.inputs[0].shape[1:])
-        in2 = Input(shape=rep_model.inputs[0].shape[1:])
+        in1 = Input(shape=self.rep_model.inputs[0].shape[1:],
+                    name='input_brep_plan2vec_train')
+        in2 = Input(shape=self.rep_model.inputs[0].shape[1:],
+                    name='input_twin_brep_plan2vec_train')
         # We can just call the test model on the first input.
         rep1 = self.rep_model(in1)
         fiber1 = self.fiber_model(in1)
         reconstr1 = self.reconstr_model([rep1, fiber1])
+
         # In the second, we need to replace the fiber value of model(in2)
         # with that of model(in1).
         rep2 = self.rep_model(in2)
         reconstr2 = self.reconstr_model([rep2, fiber1])  # new W_\phi value
+
         # Now we can create the train model
         self.train_model = BRepPlan2VecKerasTrainModel(
             inputs=[in1, in2], outputs=[rep1, fiber1, reconstr1,
@@ -311,7 +325,8 @@ class BRepPlan2VecEstimator(KerasEstimator):
             rep_dist=self.rep_dist, input_dist=self.input_dist,
             loss_w=self.loss_w, optimizer=self.optimizer,
             reconstr_loss=self.reconstr_model.loss,
-            reconstr_model_name=self.reconstr_model.name)
+            reconstr_model_name=self.reconstr_model.name,
+            name='brep_plan2vec_train')
 
     def fit(self, X, y=None, verbose=0, **kwargs):
         """Fits the given model to the given features and labels (which should
