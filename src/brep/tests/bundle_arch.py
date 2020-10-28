@@ -100,15 +100,14 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
         the task-irrelevant fiber of rep1
         """
         rep1 = y_pred[0]
-        # IGNORE - fiber1 = y_pred[1]
-        reconstr1 = y_pred[2]
-        rep2 = y_pred[3]
-        reconstr2 = y_pred[4]
+        reconstr1 = y_pred[1]
+        rep2 = y_pred[2]
+        reconstr2 = y_pred[3]
 
         dist_reconstr = self.input_dist(reconstr1, reconstr2)
         dist_rep = self.rep_dist(rep1, rep2)
 
-        return (self.reconstr_loss(y_true, y_pred) +
+        return (self.reconstr_loss(y_true, reconstr1) +
                 self.loss_w * (dist_reconstr - dist_rep) *
                 (dist_reconstr - dist_rep))
 
@@ -180,7 +179,10 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
             with tf.GradientTape() as tape:
                 rep1, fiber1, reconstr1, rep2, reconstr2 = self(X,
                                                                 training=True)
-                loss = self.compiled_loss(y, reconstr1)
+                loss = self.compiled_loss(y, [rep1,
+                                              reconstr1,
+                                              rep2,
+                                              reconstr2])
                 reconstr_loss = self.reconstr_loss(y, reconstr1)
 
             trainable_vars = self.trainable_variables
@@ -277,9 +279,6 @@ class BRepPlan2VecEstimator(KerasEstimator):
         self.reconstr_model = clone_model(reconstr_model)
         # self.reconstr_model.name = reconstr_model + '_scipy'
         self.reconstr_model.set_weights(reconstr_model.get_weights())
-        self.reconstr_model.compile(loss=reconstr_model.loss,
-                                    metrics=reconstr_model.metrics,
-                                    optimizer=reconstr_model.optimizer)
 
         # We keep the representation distance metric and input distance
         # functions (as differentiable tensors for autodifferentiation)
@@ -287,6 +286,7 @@ class BRepPlan2VecEstimator(KerasEstimator):
         self.input_dist = input_dist
 
         # record the training params
+        self.reconstr_loss = reconstr_loss
         self.loss_w = loss_w
         self.optimizer = optimizer
         self.epochs = epochs
@@ -324,7 +324,7 @@ class BRepPlan2VecEstimator(KerasEstimator):
                                         rep2, reconstr2],
             rep_dist=self.rep_dist, input_dist=self.input_dist,
             loss_w=self.loss_w, optimizer=self.optimizer,
-            reconstr_loss=self.reconstr_model.loss,
+            reconstr_loss=self.reconstr_loss,
             reconstr_model_name=self.reconstr_model.name,
             name='brep_plan2vec_train')
 
