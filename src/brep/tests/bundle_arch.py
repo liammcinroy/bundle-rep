@@ -104,10 +104,14 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
         rep2 = y_pred[2]
         reconstr2 = y_pred[3]
 
+        inp1 = y_true[0, :]
+        inp2 = y_true[1, :]
+
         dist_reconstr = self.input_dist(reconstr1, reconstr2)
         dist_rep = self.rep_dist(rep1, rep2)
 
-        return (self.reconstr_loss(y_true, reconstr1) +
+        return (self.reconstr_loss(inp1, reconstr1) +
+                self.reconstr_loss(inp2, reconstr2) +
                 self.loss_w * (dist_reconstr - dist_rep) *
                 (dist_reconstr - dist_rep))
 
@@ -225,7 +229,9 @@ class BRepPlan2VecEstimator(KerasEstimator):
         new_X = [(x1, x2)
                  for (i1, x1) in enumerate(X)
                  for (i2, x2) in enumerate(X) if i1 != i2]
-        new_y = np.array([pair_x[0] for pair_x in new_X])
+        new_y = np.array([np.vstack((pair_x[0],
+                                     pair_x[1]))
+                          for pair_x in new_X])
         return [np.array([x[0] for x in new_X]).reshape(len(new_X),
                                                         *X[0].shape),
                 np.array([x[1] for x in new_X]).reshape(len(new_X),
@@ -328,7 +334,7 @@ class BRepPlan2VecEstimator(KerasEstimator):
             reconstr_model_name=self.reconstr_model.name,
             name='brep_plan2vec_train')
 
-    def fit(self, X, y=None, verbose=0, **kwargs):
+    def fit(self, X, y=None, **kwargs):
         """Fits the given model to the given features and labels (which should
         just be the original features). In other words, the model should be
         capable firstly of reconstructing states. Additionally, there should
@@ -345,12 +351,21 @@ class BRepPlan2VecEstimator(KerasEstimator):
         Arguments:
             X: The features of the batch training set.
             y: Should be empty. Will be ignored regardless.
-            verbose: The level of verbosity to output. Defaults to 0.
             kwargs: Various tensorflow keyword arguments.
         """
+        epochs = self.epochs
+        if 'epochs' in kwargs:
+            epochs = kwargs['epochs']
+            kwargs.pop('epochs')
+
+        batch_size = self.batch_size
+        if 'batch_size' in kwargs:
+            batch_size = kwargs['batch_size']
+            kwargs.pop('batch_size')
+
         self.train_model.fit(*self.__preprocess_inputs__(X),
-                             epochs=self.epochs, batch_size=self.batch_size,
-                             verbose=verbose, **kwargs)
+                             epochs=epochs, batch_size=batch_size,
+                             **kwargs)
         return self
 
     def predict(self, X):
