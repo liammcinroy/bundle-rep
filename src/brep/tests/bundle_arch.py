@@ -92,26 +92,27 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
     customized losses.
     """
 
-    def __brep_plan2vec_loss__(self, y_true, y_pred):
-        """Defines the custom Bundle Representation Plan2Vec loss. For valid
-        pairs, then the Bundle Representantion Plan2Vec loss is a regression
-        of the distance along reconstructions to match the distance of the base
-        manifold of the representations, since reconstr2 is reconstructed with
-        the task-irrelevant fiber of rep1
+    def __brep_plan2vec_reconstr_loss__(self, y_true, y_pred):
+        """Defines the custom Bundle Representation reconstruction Plan2Vec
+        loss. For valid pairs, then the Bundle Representantion Plan2Vec loss
+        is a regression of the distance along reconstructions to match the
+        distance of the base manifold of the representations, since reconstr2
+        is reconstructed with the task-irrelevant fiber of rep1.
         """
         rep1 = y_pred[0]
-        reconstr1 = y_pred[1]
-        rep2 = y_pred[2]
-        reconstr2 = y_pred[3]
+        fiber1 = y_pred[1]
+        reconstr1 = y_pred[2]
+        rep2 = y_pred[3]
+        reconstr2 = y_pred[4]
 
         inp1 = y_true[0, :]
         inp2 = y_true[1, :]
 
         dist_reconstr = self.input_dist(reconstr1, reconstr2)
-        dist_rep = self.rep_dist(rep1, rep2)
+        dist_rep = tf.stop_gradient(self.rep_dist(rep1, rep2))
 
-        return (self.reconstr_loss(inp1, reconstr1) +
-                self.reconstr_loss(inp2, reconstr2) +
+        return (0.5 * self.reconstr_loss(inp1, reconstr1) +
+                0.5 * self.reconstr_loss(inp2, reconstr2) +
                 self.loss_w * (dist_reconstr - dist_rep) *
                 (dist_reconstr - dist_rep))
 
@@ -166,8 +167,11 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
         self.brep_loss_tracker = keras.metrics.Mean(
             name='bundle_representation_loss')
 
+        self.angle_loss_tracker = keras.metrics.Mean(
+            name='orthogonal_angle_loss')
+
         # configure the optimizer with compile
-        self.compile(loss=self.__brep_plan2vec_loss__,
+        self.compile(loss=self.__brep_plan2vec_reconstr_loss__,
                      optimizer=optimizer)
 
         def train_step(self, data):
@@ -180,29 +184,56 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
             """
             X, y = data
 
-            with tf.GradientTape() as tape:
-                rep1, fiber1, reconstr1, rep2, reconstr2 = self(X,
-                                                                training=True)
-                loss = self.compiled_loss(y, [rep1,
-                                              reconstr1,
-                                              rep2,
-                                              reconstr2])
+            with tf.GradientTape() as outer_tape:
+                # inner tape takes the gradient with respect to the input
+                # for only the representation model
+                with tf.GradientTape(persistent=True,
+                                     watch_accessed_variables=False) \
+                        as inner_tape:
+
+                    inner_tape.watch(X[0])
+
+                    rep1, fiber1, reconstr1, rep2, reconstr2 = \
+                        self(X, training=True)
+
+                # get the gradients of the representation and fiber wrt the
+                # representation and fiber to encourage orthogonality.
+                grad_rep1 = inner_tape.gradient(rep1, X[0])
+                grad_fiber1 = inner_tape.gradient(fiber1, X[0])
+
+                # get the angle to find the orthogonality of the gradient to
+                # encourage transversality
+                angles = tf.keras.losses.cosine_similarity(grad_rep1,
+                                                           grad_fiber1,
+                                                           axis=1)
+
+                angle_loss = 0.0001 * tf.math.reduce_sum(1 - angles)
+
+                brep_loss = self.compiled_loss(y, [rep1,
+                                                   reconstr1,
+                                                   rep2,
+                                                   reconstr2])
                 reconstr_loss = self.reconstr_loss(y, reconstr1)
 
+                total_loss = angle_loss + brep_loss + reconstr_loss
+
             trainable_vars = self.trainable_variables
-            gradients = tape.gradient(loss,
-                                      trainable_vars)
+            gradients = outer_tape.gradient(total_loss,
+                                            trainable_vars)
 
             # Update weights
             self.optimizer.apply_gradients(zip(gradients, trainable_vars))
 
             self.reconstr_loss_tracker.update_state(reconstr_loss)
-            self.brep_loss_tracker.update_state(loss - reconstr_loss)
+            self.brep_loss_tracker.update_state(brep_loss)
+            self.angle_loss_tracker.update_state(angle_loss)
 
             return {self.reconstr_loss_tracker.name:
                     self.reconstr_loss_tracker.result(),
                     self.brep_loss_tracker.name:
-                    self.brep_loss_tracker.result()}
+                    self.brep_loss_tracker.result(),
+                    self.angle_loss_tracker.name:
+                    self.angle_loss_tracker.result()}
 
         @property
         def metrics(self):
