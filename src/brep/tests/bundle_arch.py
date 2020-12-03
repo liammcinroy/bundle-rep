@@ -118,7 +118,7 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
 
     def __init__(self, inputs=None, outputs=None,
                  rep_dist=None, input_dist=None,
-                 loss_w=None, optimizer=None,
+                 loss_w=None, loss_angle=None, optimizer=None,
                  reconstr_loss=None, reconstr_model_name=None,
                  **kwargs):
         """Initializes a new test keras network for use with BRepPlan2Vec.
@@ -138,6 +138,8 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
                 or keras functions.
             loss_w: The weight to apply to the Bundle Representation Plan2Vec
                 loss.
+            loss_angle: The weight to apply to the angles of gradients for the
+                Bundle Representation Plan2Vec tangent loss.
             optimizer: The tensorflow.keras.optimizers.Optimizer to be used
                 in each submodel.
             reconstr_loss: A tf loss on the reconstructed output.
@@ -158,6 +160,7 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
 
         # record the training params
         self.loss_w = loss_w
+        self.loss_angle = loss_angle
         self.optimizer = optimizer
 
         # create the loss trackers
@@ -207,7 +210,7 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
                                                            grad_fiber1,
                                                            axis=1)
 
-                angle_loss = 0.0001 * tf.math.reduce_sum(1 - angles)
+                angle_loss = self.loss_angle * tf.math.reduce_sum(1 - angles)
 
                 brep_loss = self.compiled_loss(y, [rep1,
                                                    reconstr1,
@@ -270,7 +273,8 @@ class BRepPlan2VecEstimator(KerasEstimator):
 
     def __init__(self, rep_model=None, fiber_model=None, reconstr_model=None,
                  reconstr_loss=None, rep_dist=None, input_dist=None,
-                 loss_w=None, optimizer=None, epochs=None, batch_size=None):
+                 loss_w=None, loss_angle=None, optimizer=None,
+                 epochs=None, batch_size=None):
         """Initializes a new test keras network for use with BRepPlan2Vec.
         Will create a deep copy of the given network. If the model has
         additional losses, then those will be used during training as well.
@@ -296,6 +300,8 @@ class BRepPlan2VecEstimator(KerasEstimator):
                 or keras functions.
             loss_w: The weight to apply to the Bundle Representation Plan2Vec
                 loss.
+            loss_angle: The weight to apply to the angles of gradients for the
+                Bundle Representation Plan2Vec tangent loss.
             optimizer: A tf optimizer to apply to the Bundle Representation
                 training network.
             epochs: The number of epochs to train on.
@@ -325,6 +331,7 @@ class BRepPlan2VecEstimator(KerasEstimator):
         # record the training params
         self.reconstr_loss = reconstr_loss
         self.loss_w = loss_w
+        self.loss_angle = loss_angle
         self.optimizer = optimizer
         self.epochs = epochs
         self.batch_size = batch_size
@@ -360,7 +367,8 @@ class BRepPlan2VecEstimator(KerasEstimator):
             inputs=[in1, in2], outputs=[rep1, fiber1, reconstr1,
                                         rep2, reconstr2],
             rep_dist=self.rep_dist, input_dist=self.input_dist,
-            loss_w=self.loss_w, optimizer=self.optimizer,
+            loss_w=self.loss_w, loss_angle=self.loss_angle,
+            optimizer=self.optimizer,
             reconstr_loss=self.reconstr_loss,
             reconstr_model_name=self.reconstr_model.name,
             name='brep_plan2vec_train')
