@@ -92,6 +92,28 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
     customized losses.
     """
 
+    def __brep_plan2vec_loss__(self, y_true, y_pred):
+        """Defines the custom Bundle Representation reconstruction Plan2Vec
+        loss. For valid pairs, then the Bundle Representantion Plan2Vec loss
+        is a regression of the distance along reconstructions to match the
+        distance of the base manifold of the representations, since reconstr2
+        is reconstructed with the task-irrelevant fiber of rep1.
+        """
+        rep1 = y_pred[0]
+        fiber1 = y_pred[1]  # noqa
+        reconstr1 = y_pred[2]
+        rep2 = y_pred[3]
+        reconstr2 = y_pred[4]
+
+        inp1 = y_true[0, :]  # noqa
+        inp2 = y_true[1, :]  # noqa
+
+        dist_reconstr = tf.stop_gradient(self.input_dist(reconstr1, reconstr2))
+        dist_rep = self.rep_dist(rep1, rep2)
+
+        return (self.loss_w * (dist_reconstr - dist_rep) *
+                (dist_reconstr - dist_rep))
+
     def __brep_plan2vec_reconstr_loss__(self, y_true, y_pred):
         """Defines the custom Bundle Representation reconstruction Plan2Vec
         loss. For valid pairs, then the Bundle Representantion Plan2Vec loss
@@ -100,7 +122,7 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
         is reconstructed with the task-irrelevant fiber of rep1.
         """
         rep1 = y_pred[0]
-        fiber1 = y_pred[1]
+        fiber1 = y_pred[1]  # noqa
         reconstr1 = y_pred[2]
         rep2 = y_pred[3]
         reconstr2 = y_pred[4]
@@ -120,6 +142,7 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
                  rep_dist=None, input_dist=None,
                  loss_w=None, loss_angle=None, optimizer=None,
                  reconstr_loss=None, reconstr_model_name=None,
+                 alternate_params=None,
                  **kwargs):
         """Initializes a new test keras network for use with BRepPlan2Vec.
         Will create a deep copy of the given networks to construct its own.
@@ -144,6 +167,8 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
                 in each submodel.
             reconstr_loss: A tf loss on the reconstructed output.
             reconstr_model_name: The name to pass to the loss on reconstr1.
+            alternate_params: Either None to not alternate, or a dict that
+                has the keys `reconstr_epochs` and `rep_epochs`.
         """
         # Now we can create the train model
         super(BRepPlan2VecKerasTrainModel, self).__init__(inputs=inputs,
@@ -173,8 +198,13 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
         self.angle_loss_tracker = keras.metrics.Mean(
             name='orthogonal_angle_loss')
 
+        self.alternate_params = alternate_params
+
         # configure the optimizer with compile
-        self.compile(loss=self.__brep_plan2vec_reconstr_loss__,
+        self.compile(loss=
+                     self.__brep_plan2vec_reconstr_loss__
+                     if alternate_params is None else
+                     self.__brep_plan2vec_loss__,
                      optimizer=optimizer)
 
         def train_step(self, data):
@@ -216,7 +246,8 @@ class BRepPlan2VecKerasTrainModel(keras.Model):
                                                    reconstr1,
                                                    rep2,
                                                    reconstr2])
-                reconstr_loss = self.reconstr_loss(y, reconstr1)
+                reconstr_loss = (self.reconstr_loss(y[0, :], reconstr1) +
+                                 self.reconstr_loss(y[1, :], reconstr2))
 
                 total_loss = angle_loss + brep_loss + reconstr_loss
 
@@ -371,6 +402,7 @@ class BRepPlan2VecEstimator(KerasEstimator):
             optimizer=self.optimizer,
             reconstr_loss=self.reconstr_loss,
             reconstr_model_name=self.reconstr_model.name,
+            alternate_params={},
             name='brep_plan2vec_train')
 
     def fit(self, X, y=None, **kwargs):
